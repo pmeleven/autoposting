@@ -271,7 +271,8 @@ CLASS lcl_auto_post IMPLEMENTATION.
     "Prepare table for time confirmed orders.
     i_confirmed_orders[] = VALUE #( FOR line_conf IN lt_release_orders ( aufnr = line_conf-aufnr
                                                                          arbei = line_conf-arbei
-                                                                         vornr = line_conf-vornr ) ).
+                                                                         vornr = line_conf-vornr
+                                                                         fsavd = line_conf-fsavd ) ).
 
     DELETE ADJACENT DUPLICATES FROM lt_release_orders COMPARING aufnr.
 
@@ -335,6 +336,11 @@ CLASS lcl_auto_post IMPLEMENTATION.
     DATA: lv_ran_int_conf TYPE qf00-ran_int.
 
     DATA: lv_work TYPE i.
+    DATA(lv_basic_start_date) = sy-datum.
+    DATA(lv_basic_start_date1) = sy-datum + 1.
+    DATA(lv_basic_start_date2) = sy-datum - 1.
+    DATA(lv_basic_start_date3) = sy-datum + 2.
+    DATA(lv_basic_start_date4) = sy-datum - 2.
 
     IF g_out_operation IS NOT INITIAL.
 
@@ -362,7 +368,7 @@ CLASS lcl_auto_post IMPLEMENTATION.
 
         "Time confirmation probabilities for Start Date
         DATA(lv_min_conf) = 1.
-        DATA(lv_max_conf) = 4.
+        DATA(lv_max_conf) = 100.
 
         CALL FUNCTION 'QF05_RANDOM_INTEGER'
           EXPORTING
@@ -374,54 +380,61 @@ CLASS lcl_auto_post IMPLEMENTATION.
             invalid_input = 1
             OTHERS        = 2.
         IF sy-subrc EQ 0.
-          CASE lv_ran_int_conf.
-            WHEN 1. "basic start date = today's date
-              DATA(lv_basic_start_date) = sy-datum.
-            WHEN 2. "Basic Start Date equals yesterday
-              lv_basic_start_date = sy-datum - 1.
-            WHEN 3. "Basic Start Date equals 2 days ago.
-              lv_basic_start_date = sy-datum - 2.
-            WHEN 4. "Basic Start Date equals 3 days ago.
-              lv_basic_start_date = sy-datum - 3.
-          ENDCASE.
+*          CASE lv_ran_int_conf.
+*            WHEN 1. "basic start date = today's date
+
+*            WHEN 2. "Basic Start Date equals yesterday
+*              lv_basic_start_date = sy-datum - 1.
+*            WHEN 3. "Basic Start Date equals 2 days ago.
+*              lv_basic_start_date = sy-datum - 2.
+*            WHEN 4. "Basic Start Date equals 3 days ago.
+*              lv_basic_start_date = sy-datum - 3.
+*          ENDCASE.
         ENDIF.
 
-        FREE: lt_timeconfirmation, lt_return_conf_msg.
+        IF ( lv_ran_int_conf < 50 AND ls_released-fsavd = lv_basic_start_date )
+          OR ( lv_ran_int_conf > 50 AND lv_ran_int_conf <= 60 AND ls_released-fsavd = lv_basic_start_date1 )
+          OR ( lv_ran_int_conf > 60 AND lv_ran_int_conf <= 70 AND ls_released-fsavd = lv_basic_start_date2 )
+          OR ( lv_ran_int_conf > 70 AND lv_ran_int_conf <= 75 AND ls_released-fsavd = lv_basic_start_date3 )
+          OR ( lv_ran_int_conf > 75 AND lv_ran_int_conf <= 80 AND ls_released-fsavd = lv_basic_start_date4 )
+          OR ( lv_ran_int_conf = 99 ).
+
+          FREE: lt_timeconfirmation, lt_return_conf_msg.
 *      "Prepare table for BAPI call
-        APPEND VALUE #( orderid         = ls_released-aufnr
-                        operation       = ls_released-vornr
-                        fin_conf        = abap_true
-                        postg_date      = sy-datum
-                        exec_start_date = lv_basic_start_date
-                        exec_fin_date   = lv_basic_start_date
-                        act_work_2      = lv_work ) TO lt_timeconfirmation.
+          APPEND VALUE #( orderid         = ls_released-aufnr
+                          operation       = ls_released-vornr
+                          fin_conf        = abap_true
+                          postg_date      = sy-datum
+                          exec_start_date = lv_basic_start_date
+                          exec_fin_date   = lv_basic_start_date
+                          act_work_2      = lv_work ) TO lt_timeconfirmation.
 
-        CALL FUNCTION 'BAPI_ALM_CONF_CREATE'
-          TABLES
-            timetickets   = lt_timeconfirmation
-            detail_return = lt_return_conf_msg.
+          CALL FUNCTION 'BAPI_ALM_CONF_CREATE'
+            TABLES
+              timetickets   = lt_timeconfirmation
+              detail_return = lt_return_conf_msg.
 
-        IF line_exists( lt_return_conf_msg[ type = 'I' ] ).
-          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
-            EXPORTING
-              wait = abap_true.
-        ELSE.
-          CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
-        ENDIF.
+          IF line_exists( lt_return_conf_msg[ type = 'I' ] ).
+            CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+              EXPORTING
+                wait = abap_true.
+          ELSE.
+            CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+          ENDIF.
 
 *     "Move return message to i_final_order for report display
-        i_bapi_timeconf  = VALUE #( FOR line IN lt_return_conf_msg
+          i_bapi_timeconf  = VALUE #( FOR line IN lt_return_conf_msg
 *                                ( conf_msg = |{ line-message_v1 }| & | : | & |{  line-message }| ) ).
-                                ( conf_msg = |{ ls_released-aufnr }| & | | & | { ls_released-vornr }| & | : | & |{  line-message }| ) ).
-        i_timeconf = VALUE #( FOR order_line IN lt_return_conf_msg WHERE ( type = 'I' )
-                                     ( aufnr = order_line-message_v1 ) ).
+                                  ( conf_msg = |{ ls_released-aufnr }| & | | & | { ls_released-vornr }| & | : | & |{  line-message }| ) ).
+          i_timeconf = VALUE #( FOR order_line IN lt_return_conf_msg WHERE ( type = 'I' )
+                                       ( aufnr = order_line-message_v1 ) ).
 
-        APPEND LINES OF i_bapi_timeconf TO i_conf_msg.
-        APPEND LINES OF i_timeconf TO i_final_order.
+          APPEND LINES OF i_bapi_timeconf TO i_conf_msg.
+          APPEND LINES OF i_timeconf TO i_final_order.
 
-        FREE: i_bapi_timeconf, i_timeconf.
-        CLEAR: lv_min_conf, lv_max_conf, lv_ran_int_conf, lv_basic_start_date.
-
+          FREE: i_bapi_timeconf, i_timeconf.
+          CLEAR: lv_min_conf, lv_max_conf, lv_ran_int_conf, lv_basic_start_date.
+        ENDIF.
       ENDLOOP.
 
     ELSE.
@@ -473,7 +486,8 @@ CLASS lcl_auto_post IMPLEMENTATION.
       "Prepare table for time confirmed orders.
       i_confirmed_orders[] = VALUE #( FOR line_conf IN g_out_operation ( aufnr = line_conf-aufnr
                                                                          arbei = line_conf-arbei
-                                                                         vornr = line_conf-vornr ) ).
+                                                                         vornr = line_conf-vornr
+                                                                         fsavd = line_conf-fsavd ) ).
       SORT i_confirmed_orders BY aufnr vornr.
 
       lv_min_op = 1.
@@ -496,7 +510,7 @@ CLASS lcl_auto_post IMPLEMENTATION.
 
         "Time confirmation probabilities for Start Date
         lv_min_conf = 1.
-        lv_max_conf = 4.
+        lv_max_conf = 100.
 
         CALL FUNCTION 'QF05_RANDOM_INTEGER'
           EXPORTING
@@ -508,54 +522,61 @@ CLASS lcl_auto_post IMPLEMENTATION.
             invalid_input = 1
             OTHERS        = 2.
         IF sy-subrc EQ 0.
-          CASE lv_ran_int_conf.
-            WHEN 1. "basic start date = today's date
-              lv_basic_start_date = sy-datum.
-            WHEN 2. "Basic Start Date equals yesterday
-              lv_basic_start_date = sy-datum - 1.
-            WHEN 3. "Basic Start Date equals 2 days ago.
-              lv_basic_start_date = sy-datum - 2.
-            WHEN 4. "Basic Start Date equals 3 days ago.
-              lv_basic_start_date = sy-datum - 3.
-          ENDCASE.
+*          CASE lv_ran_int_conf.
+*            WHEN 1. "basic start date = today's date
+*              lv_basic_start_date = sy-datum.
+*            WHEN 2. "Basic Start Date equals yesterday
+*              lv_basic_start_date = sy-datum - 1.
+*            WHEN 3. "Basic Start Date equals 2 days ago.
+*              lv_basic_start_date = sy-datum - 2.
+*            WHEN 4. "Basic Start Date equals 3 days ago.
+*              lv_basic_start_date = sy-datum - 3.
+*          ENDCASE.
         ENDIF.
 
-        FREE: lt_timeconfirmation, lt_return_conf_msg.
+        IF ( lv_ran_int_conf < 50 AND ls_released-fsavd = lv_basic_start_date )
+          OR ( lv_ran_int_conf > 50 AND lv_ran_int_conf <= 60 AND ls_released-fsavd = lv_basic_start_date1 )
+          OR ( lv_ran_int_conf > 60 AND lv_ran_int_conf <= 70 AND ls_released-fsavd = lv_basic_start_date2 )
+          OR ( lv_ran_int_conf > 70 AND lv_ran_int_conf <= 75 AND ls_released-fsavd = lv_basic_start_date3 )
+          OR ( lv_ran_int_conf > 75 AND lv_ran_int_conf <= 80 AND ls_released-fsavd = lv_basic_start_date4 )
+          OR ( lv_ran_int_conf = 99 ).
+
+          FREE: lt_timeconfirmation, lt_return_conf_msg.
 *      "Prepare table for BAPI call
-        APPEND VALUE #( orderid         = ls_released-aufnr
-                        operation       = ls_released-vornr
-                        fin_conf        = abap_true
-                        postg_date      = sy-datum
-                        exec_start_date = lv_basic_start_date
-                        exec_fin_date   = lv_basic_start_date
-                        act_work_2      = lv_work ) TO lt_timeconfirmation.
+          APPEND VALUE #( orderid         = ls_released-aufnr
+                          operation       = ls_released-vornr
+                          fin_conf        = abap_true
+                          postg_date      = sy-datum
+                          exec_start_date = lv_basic_start_date
+                          exec_fin_date   = lv_basic_start_date
+                          act_work_2      = lv_work ) TO lt_timeconfirmation.
 
-        CALL FUNCTION 'BAPI_ALM_CONF_CREATE'
-          TABLES
-            timetickets   = lt_timeconfirmation
-            detail_return = lt_return_conf_msg.
+          CALL FUNCTION 'BAPI_ALM_CONF_CREATE'
+            TABLES
+              timetickets   = lt_timeconfirmation
+              detail_return = lt_return_conf_msg.
 
-        IF line_exists( lt_return_conf_msg[ type = 'I' ] ).
-          CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
-            EXPORTING
-              wait = abap_true.
-        ELSE.
-          CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
-        ENDIF.
+          IF line_exists( lt_return_conf_msg[ type = 'I' ] ).
+            CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+              EXPORTING
+                wait = abap_true.
+          ELSE.
+            CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+          ENDIF.
 
 *     "Move return message to i_final_order for report display
-        i_bapi_timeconf  = VALUE #( FOR line IN lt_return_conf_msg
+          i_bapi_timeconf  = VALUE #( FOR line IN lt_return_conf_msg
 *                                ( conf_msg = |{ line-message_v1 }| & | : | & |{  line-message }| ) ).
-                                ( conf_msg = |{ ls_released-aufnr }| & | | & | { ls_released-vornr }| & | : | & |{  line-message }| ) ).
-        i_timeconf = VALUE #( FOR order_line IN lt_return_conf_msg WHERE ( type = 'I' )
-                                     ( aufnr = order_line-message_v1 ) ).
+                                  ( conf_msg = |{ ls_released-aufnr }| & | | & | { ls_released-vornr }| & | : | & |{  line-message }| ) ).
+          i_timeconf = VALUE #( FOR order_line IN lt_return_conf_msg WHERE ( type = 'I' )
+                                       ( aufnr = order_line-message_v1 ) ).
 
-        APPEND LINES OF i_bapi_timeconf TO i_conf_msg.
-        APPEND LINES OF i_timeconf TO i_final_order.
+          APPEND LINES OF i_bapi_timeconf TO i_conf_msg.
+          APPEND LINES OF i_timeconf TO i_final_order.
 
-        FREE: i_bapi_timeconf, i_timeconf.
-        CLEAR: lv_min_conf, lv_max_conf, lv_ran_int_conf, lv_basic_start_date.
-
+          FREE: i_bapi_timeconf, i_timeconf.
+          CLEAR: lv_min_conf, lv_max_conf, lv_ran_int_conf, lv_basic_start_date.
+        ENDIF.
       ENDLOOP.
 
     ENDIF.
@@ -783,7 +804,8 @@ ENDCLASS.
 CLASS lcl_get_orders IMPLEMENTATION.
 
   METHOD read_order_tab.
-
+    DATA(select_date) = sy-datum.
+    select_date = select_date + 3.
     IF g_found IS NOT INITIAL. "time confirmation
       SELECT aufk~aufnr,
              aufk~objnr,
@@ -800,14 +822,17 @@ CLASS lcl_get_orders IMPLEMENTATION.
              jest~stat,
              jest~inact
         FROM aufk
+       INNER JOIN afih ON aufk~aufnr = afih~aufnr
        INNER JOIN afko ON afko~aufnr = aufk~aufnr
        INNER JOIN afvc ON afvc~aufpl = afko~aufpl
        INNER JOIN afvv ON afvc~aufpl = afvv~aufpl AND afvc~aplzl = afvv~aplzl
        INNER JOIN jest ON jest~objnr = aufk~objnr
-        INTO TABLE @DATA(lt_operation)
        WHERE jest~stat  = @im_stat
          AND jest~inact = @space
-         AND aufk~werks = @im_werks.
+         AND aufk~werks = @im_werks
+         AND afih~warpl IS NOT INITIAL
+         AND afvv~fsavd <= @select_date
+        INTO TABLE @DATA(lt_operation).
 
       IF sy-subrc EQ 0.
         SORT lt_operation BY aufnr.
@@ -827,28 +852,32 @@ CLASS lcl_get_orders IMPLEMENTATION.
 
     ELSE. "teco work order; release WO
 
-      SELECT aufk~aufnr
-             aufk~objnr
-             aufk~werks
-             aufk~vaplz
-             aufk~wawrk
-             afvc~vornr
-             afvv~arbei
-             afvv~ismnw
-             afvv~ofmnw
-             afvv~arbeh
-             afvv~fsavd
-             afvv~fsedd
-             jest~stat
+      SELECT aufk~aufnr,
+             aufk~objnr,
+             aufk~werks,
+             aufk~vaplz,
+             aufk~wawrk,
+             afvc~vornr,
+             afvv~arbei,
+             afvv~ismnw,
+             afvv~ofmnw,
+             afvv~arbeh,
+             afvv~fsavd,
+             afvv~fsedd,
+             jest~stat,
              jest~inact
         FROM aufk
+       INNER JOIN afih ON aufk~aufnr = afih~aufnr
        INNER JOIN afko ON afko~aufnr = aufk~aufnr
        INNER JOIN afvc ON afvc~aufpl = afko~aufpl
        INNER JOIN afvv ON afvc~aufpl = afvv~aufpl AND afvc~aplzl = afvv~aplzl
        INNER JOIN jest ON jest~objnr = aufk~objnr
-        INTO TABLE lt_operation
-       WHERE jest~inact = space
-         AND aufk~werks = im_werks.
+       WHERE jest~stat  = @im_stat
+         AND jest~inact = @space
+         AND aufk~werks = @im_werks
+         AND afih~warpl IS NOT INITIAL
+         AND afvv~fsavd <= @select_date
+         INTO TABLE @lt_operation.
 
       IF sy-subrc EQ 0.
         SORT lt_operation BY aufnr.
