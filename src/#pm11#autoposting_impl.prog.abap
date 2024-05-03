@@ -642,31 +642,32 @@ CLASS lcl_auto_post IMPLEMENTATION.
       DATA(lv_cnf)  = 'I0009'.
       DATA(lv_teco) = 'I0045'.
 
+
       DATA(o_get_conf_ord) = NEW lcl_get_orders( ).
       o_get_conf_ord->read_order_tab( im_werks       = lv_werks
                                       im_stat        = lv_cnf ).
 
-*     "Remove TECO orders
-      lt_teco = VALUE #( FOR ls_ops IN g_out_operation WHERE ( stat = lv_teco )
-                                      ( sign   = 'I'
-                                        option = 'EQ'
-                                        low    = ls_ops-aufnr ) ).
-
-      IF lt_teco IS NOT INITIAL.
-        DELETE ADJACENT DUPLICATES FROM lt_teco.
-        DELETE g_out_operation WHERE aufnr IN lt_teco.
-      ENDIF.
+**     "Remove TECO orders
+*      lt_teco = VALUE #( FOR ls_ops IN g_out_operation WHERE ( stat = lv_teco )
+*                                      ( sign   = 'I'
+*                                        option = 'EQ'
+*                                        low    = ls_ops-aufnr ) ).
+*
+*      IF lt_teco IS NOT INITIAL.
+*        DELETE ADJACENT DUPLICATES FROM lt_teco.
+*        DELETE g_out_operation WHERE aufnr IN lt_teco.
+*      ENDIF.
 
 *     "Retain CNF orders only
-      lt_cnf = VALUE #( FOR ls_ops IN g_out_operation WHERE ( stat = lv_cnf )
-                                      ( sign   = 'I'
-                                        option = 'EQ'
-                                        low    = ls_ops-aufnr ) ).
-
-      IF lt_cnf IS NOT INITIAL.
-        DELETE ADJACENT DUPLICATES FROM lt_cnf.
-        DELETE g_out_operation WHERE aufnr NOT IN lt_cnf.
-      ENDIF.
+*      lt_cnf = VALUE #( FOR ls_ops IN g_out_operation WHERE ( stat = lv_cnf )
+*                                      ( sign   = 'I'
+*                                        option = 'EQ'
+*                                        low    = ls_ops-aufnr ) ).
+*
+*      IF lt_cnf IS NOT INITIAL.
+*        DELETE ADJACENT DUPLICATES FROM lt_cnf.
+*        DELETE g_out_operation WHERE aufnr NOT IN lt_cnf.
+*      ENDIF.
 
       DELETE ADJACENT DUPLICATES FROM g_out_operation COMPARING aufnr.
 
@@ -705,6 +706,7 @@ CLASS lcl_auto_post IMPLEMENTATION.
         ENDIF.
 
         APPEND LINES OF i_bapi_teco TO i_teco_msg.
+        FREE i_bapi_teco.
       ENDLOOP.
 
     ENDIF.
@@ -805,6 +807,7 @@ CLASS lcl_get_orders IMPLEMENTATION.
 
   METHOD read_order_tab.
     DATA(select_date) = sy-datum.
+    DATA(lv_rel) = 'I0002'.
     select_date = select_date + 3.
     IF g_found IS NOT INITIAL. "time confirmation
       SELECT aufk~aufnr,
@@ -850,8 +853,39 @@ CLASS lcl_get_orders IMPLEMENTATION.
 
       ENDIF.
 
-    ELSE. "teco work order; release WO
+    ELSEIF im_stat = 'I0009'. "Find Orders both CNF and REL
 
+      SELECT aufk~aufnr,
+             aufk~objnr,
+             aufk~werks,
+             aufk~vaplz,
+             aufk~wawrk,
+             afvc~vornr,
+             afvv~arbei,
+             afvv~ismnw,
+             afvv~ofmnw,
+             afvv~arbeh,
+             afvv~fsavd,
+             afvv~fsedd,
+             jest~stat,
+             jest~inact
+        FROM aufk
+       INNER JOIN afih ON aufk~aufnr = afih~aufnr
+       INNER JOIN afko ON afko~aufnr = aufk~aufnr
+       INNER JOIN afvc ON afvc~aufpl = afko~aufpl
+       INNER JOIN afvv ON afvc~aufpl = afvv~aufpl AND afvc~aplzl = afvv~aplzl
+       INNER JOIN jest ON jest~objnr = aufk~objnr and jest~stat  = @im_stat and jest~inact = @space
+       INNER JOIN jest AS rel ON rel~objnr = aufk~objnr and rel~stat = @lv_rel and rel~inact = @space
+       WHERE aufk~werks = @im_werks
+         AND afih~warpl IS NOT INITIAL
+         AND afvv~fsavd <= @select_date
+         INTO TABLE @lt_operation.
+
+      IF sy-subrc EQ 0.
+        SORT lt_operation BY aufnr.
+      ENDIF.
+
+    ELSE."teco work order; release WO
       SELECT aufk~aufnr,
              aufk~objnr,
              aufk~werks,
@@ -882,7 +916,6 @@ CLASS lcl_get_orders IMPLEMENTATION.
       IF sy-subrc EQ 0.
         SORT lt_operation BY aufnr.
       ENDIF.
-
     ENDIF.
 
 
